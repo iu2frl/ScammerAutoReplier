@@ -10,10 +10,9 @@ from email.mime.text import MIMEText
 import smtplib
 # Import additional classes
 import g4f
-import sqlite3
 from imap_tools import MailBox, A
 
-logging.getLogger().setLevel(logging.DEBUG)
+logging.getLogger().setLevel(logging.INFO)
 logging.getLogger('imapclient').setLevel(logging.WARNING)
 logging.getLogger('asyncio').setLevel(logging.WARNING)
 
@@ -101,8 +100,10 @@ class EmailClient:
         """
         unread_emails: list[EmailMessage] = []
         with MailBox(self.imap_address).login(self.username, self.password, 'INBOX') as mailbox:
-            mailbox_content = mailbox.fetch(A(answered=False))
+            mailbox_content = mailbox.fetch(A(seen=False))
             for msg in mailbox_content:
+                if "reply" in msg.from_:
+                    continue
                 email_from = msg.from_
                 email_body = msg.text or msg.html
                 email_subject = msg.subject
@@ -123,11 +124,11 @@ class EmailClient:
             reply_content (str): The content of the reply message.
         """
         smtp_port = 587  # Change this according to your SMTP server configuration
-        
+        logging.info("Sending reply to message [%s]", email_obj.subject)
         msg = MIMEText(email_obj.reply)
         msg['From'] = self.username
         msg['To'] = email_obj.sender
-        if "Re: " not in msg['Subject']:
+        if "Re: " not in email_obj.subject:
             msg['Subject'] = f"Re: {email_obj.subject}"
         else:
             msg['Subject'] = email_obj.subject
@@ -156,7 +157,7 @@ def gpt_response(email_body) -> str:
     personality = os.getenv('SCAMMERREPLIER_PERS')
     if not personality:
         logging.debug("Applying default personality")
-        personality = "Sei Luca, una persona che ha ricevuto questa mail da parte di un truffatore e vuole mantenere attiva la conversazione con il truffatore per fargli perdere tempo ed evitare che truffi altre persone, non sono richiesti consulti legali o consulenze, devi solo rispondergli come fossi un utente che ha abboccato:"
+        personality = "Sei Luca Tux, un personaggio fittizio tonto e credulone. Luca ha appena ricevuto questa email, quale sarebbe il corpo della mail in risposta a questa email? Non introdurre commenti o consigli, solo il corpo della mail di risposta da ottimo credulone. Non essere sarcastico."
     else:
         logging.debug("Using custom personality")
 
@@ -164,8 +165,9 @@ def gpt_response(email_body) -> str:
     response = ""
     try:
         response = g4f.ChatCompletion.create(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": f"{personality}\n\n\"{email_body}\""}],
+            model=g4f.models.default, # Using the default model
+            provider=g4f.Provider.Bing, # Specifying the provider as Gemini
+            messages=[{"role": "assistant", "content": f"{personality}\n\n\"{email_body}\""}],
         )
     except Exception as ret_exc:
         logging.error("Chatbot returned error: %s", ret_exc)
@@ -201,7 +203,7 @@ def init_mail_server() -> EmailClient:
     
     return mail_server
 
-def get_unread_emails_from_imap(mail_server) -> list[EmailMessage]:
+def get_unread_emails_from_imap(mail_server: EmailClient) -> list[EmailMessage]:
     """
     Process emails from the imap server
 
@@ -250,11 +252,11 @@ def main():
         unread_emails = get_unread_emails_from_imap(mail_server)
         if unread_emails:
             emails_with_replies = generate_replies(unread_emails)
-            # for single_email in emails_with_replies:
-            #     if len(single_email.reply) > 5:
-            #         mail_server.reply_to_email(single_email)
-            #     else:
-            #         logging.warning("Reply [%s] is too short to be sent", single_email.reply)
+            for single_email in emails_with_replies:
+                if len(single_email.reply) > 5:
+                    mail_server.reply_to_email(single_email)
+                else:
+                    logging.warning("Reply [%s] is too short to be sent", single_email.reply)
         # Waits for next execution
         logging.info("Waiting for next execution...")
         time.sleep(int(os.getenv('SCAMMERREPLIER_TIME', default="600")))
