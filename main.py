@@ -107,7 +107,7 @@ class EmailClient:
                 email_from = msg.from_
                 email_body = msg.text or msg.html
                 email_subject = msg.subject
-                new_email = EmailMessage(email_from, email_subject, email_body, self.username)
+                new_email = EmailMessage(email_from, email_subject, email_body[:1000], self.username)
                 unread_emails.append(new_email)
         if len(unread_emails) > 0:
             logging.info("Hurray! we have %i emails to play with!", len(unread_emails))
