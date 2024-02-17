@@ -33,14 +33,14 @@ class EmailMessage:
     body: str
     my_email: str #TODO: handle forwarded emails
     reply: str
-    
+
     def __init__(self, sender, subject, body, my_email):
         self.sender = sender
         self.subject = subject
         self.body = body
         self.my_email = my_email
         self.reply = ""
-    
+
     def __str__(self):
         return f"From: {self.sender}\nSubject: {self.subject}\nBody: {self.body}\nReply: {self.reply}"
 
@@ -200,7 +200,7 @@ def init_mail_server() -> EmailClient:
     except Exception as ret_exc:
         logging.error("Cannot access mail server, error: %s", ret_exc)
         raise SystemExit from ret_exc
-    
+
     return mail_server
 
 def get_unread_emails_from_imap(mail_server: EmailClient) -> list[EmailMessage]:
