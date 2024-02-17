@@ -12,6 +12,11 @@ import smtplib
 import g4f
 from imap_tools import MailBox, A
 
+blacklist = [
+    "noreply",
+    "postmaster@outlook.com"
+]
+
 logging.getLogger().setLevel(logging.INFO)
 logging.getLogger('imapclient').setLevel(logging.WARNING)
 logging.getLogger('asyncio').setLevel(logging.WARNING)
@@ -102,7 +107,7 @@ class EmailClient:
         with MailBox(self.imap_address).login(self.username, self.password, 'INBOX') as mailbox:
             mailbox_content = mailbox.fetch(A(seen=False))
             for msg in mailbox_content:
-                if "reply" in msg.from_:
+                if msg.from_ in blacklist:
                     continue
                 email_from = msg.from_
                 email_body = msg.text or msg.html
