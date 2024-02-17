@@ -6,16 +6,16 @@ This module provides a chatbot to entertain scammers, it is going to reply to al
 import os
 import logging
 import time
-import email
 from email.mime.text import MIMEText
 import smtplib
 # Import additional classes
 import g4f
 import sqlite3
-from imapclient import IMAPClient
+from imap_tools import MailBox, A
 
 logging.getLogger().setLevel(logging.DEBUG)
 logging.getLogger('imapclient').setLevel(logging.WARNING)
+logging.getLogger('asyncio').setLevel(logging.WARNING)
 
 class EmptyStringError(Exception):
     """
@@ -50,7 +50,6 @@ class EmailClient:
     Wrapper for the imapclient module, provides authentication,
     gets emails and replies to them
     """
-    imap_server: IMAPClient
     username: str
     password: str
     imap_address: str
@@ -65,9 +64,7 @@ class EmailClient:
         self.smtp_address = smtp_address
         self.search_filter = search_filter
         self.validate_connection_details()
-        logging.info("Validation passed, logging into %s as %s", imap_address, username)
-        self.imap_server = IMAPClient(imap_address, use_uid=True)
-        self.imap_server.login(username, password)
+        logging.info("Validation passed for %s as %s", imap_address, username)
 
     def validate_connection_details(self):
         """
@@ -95,17 +92,6 @@ class EmailClient:
             logging.error("search_filter variable is invalid")
             raise EmptyStringError()
 
-    def get_unread_emails_cnt(self) -> int:
-        """
-        Returns the number of unread emails in the INBOX folder       
-
-        Returns:
-            int: Count of unread emails in inbox
-        """
-        select_info = self.imap_server.select_folder('INBOX')
-        unread_emails = self.imap_server.search([self.search_filter])
-        return len(unread_emails)
-
     def get_unread_emails(self) -> list:
         """
         Retrieves unread emails from the INBOX folder
@@ -113,24 +99,19 @@ class EmailClient:
         Returns:
             list: List of EmailMessage objects representing unread emails
         """
-        email_ids = self.imap_server.search([self.search_filter])
-        unread_emails = []
-        for email_id in email_ids:
-            email_data = self.imap_server.fetch([email_id], ['RFC822'])
-            raw_email = email_data[email_id][b'RFC822']
-            email_message = email.message_from_bytes(raw_email)
-            sender = email_message['From']
-            subject = email_message['Subject']
-            body = email_message.get_payload()
-            if len(body) > 1:
-                body = body[0]
-            else:
-                body = body.as_string()
-            for part in body.walk():
-                if part.get_content_type() == "text/plain":
-                    body = str(part)
-            email_obj = EmailMessage(sender, subject, body, self.username)
-            unread_emails.append(email_obj)
+        unread_emails: list[EmailMessage] = []
+        with MailBox(self.imap_address).login(self.username, self.password, 'INBOX') as mailbox:
+            mailbox_content = mailbox.fetch(A(answered=False))
+            for msg in mailbox_content:
+                email_from = msg.from_
+                email_body = msg.text or msg.html
+                email_subject = msg.subject
+                new_email = EmailMessage(email_from, email_subject, email_body, self.username)
+                unread_emails.append(new_email)
+        if len(unread_emails) > 0:
+            logging.info("Hurray! we have %i emails to play with!", len(unread_emails))
+        else:
+            logging.info("No new emails to process")
         return unread_emails
 
     def reply_to_email(self, email_obj: EmailMessage) -> None:
@@ -180,10 +161,16 @@ def gpt_response(email_body) -> str:
         logging.debug("Using custom personality")
 
     ## Normal response
-    response = g4f.ChatCompletion.create(
-        model=g4f.models.gpt_4,
-        messages=[{"role": "user", "content": f"{personality}\n\n\"{email_body}\""}],
-    )
+    response = ""
+    try:
+        response = g4f.ChatCompletion.create(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": f"{personality}\n\n\"{email_body}\""}],
+        )
+    except Exception as ret_exc:
+        logging.error("Chatbot returned error: %s", ret_exc)
+        return ""
+    # Did we get a valid response?
     if len(response) > 10:
         logging.debug("Got a response from the chatbot: %s", response)
         return response
@@ -224,17 +211,13 @@ def get_unread_emails_from_imap(mail_server) -> list[EmailMessage]:
         A list of EmailMessage(s) to be processed
     """
     # Init email client
+    unread_emails: list[EmailMessage] = []
     try:
-        unread_emails_cnt = mail_server.get_unread_emails_cnt()
+        unread_emails = mail_server.get_unread_emails()
     except Exception as ret_exc:
         logging.error("Cannot access mail server, error: %s", ret_exc)
         raise SystemExit from ret_exc
-    if unread_emails_cnt > 0:
-        logging.debug("Hurray! We got %i email(s) to process!", unread_emails_cnt)
-        unread_emails = mail_server.get_unread_emails()
-        return unread_emails
-    else:
-        logging.debug("No new emails to process")
+    return unread_emails
 
 def generate_replies(input_list: list[EmailMessage]) -> list[EmailMessage]:
     """
@@ -249,7 +232,7 @@ def generate_replies(input_list: list[EmailMessage]) -> list[EmailMessage]:
 
     for new_email in input_list:
         logging.debug("Generating answer for email from: [%s], subject: [%s]", str(new_email.sender), str(new_email.subject))
-        logging.debug("\tBody: %s", new_email.body)
+        #logging.debug("\tBody: %s", new_email.body)
         if len(new_email.body) > 5:
             new_email.reply = gpt_response(new_email.body)
         else:
